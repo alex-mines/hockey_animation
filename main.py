@@ -1,18 +1,29 @@
-"""Example animation: two skaters fight for the puck.
+"""Example animation: two skaters fight for the puck, differently every time.
 
-A Team A (Type 1) skater starts at the top middle of the ice and dribbles the
-puck counter-clockwise: left along the top boards, down behind the west goal
-and along the bottom. A Team B (Type 1) skater starts at the bottom middle and
-skates clockwise to meet them, steals the puck and carries it on round the
-rink, behind the west goal and along the top. The Team A skater turns round,
-catches up and steals the puck back, then carries it on round behind the east
-goal and shoots it into the west goal from half ice, with the Team B skater
-chasing.
+A Team A (Type 1) skater starts at the top middle of the ice and a Team B
+(Type 1) skater at the bottom middle, both facing west. Each play is drawn at
+random:
 
-Press SPACE to play it again, ESC to quit.
+- which team starts with the puck (a coin flip),
+- whether the other team's first steal attempt works (a coin flip), which
+  decides who is chasing whom,
+- how many times the puck changes hands after that (exponential with an
+  average of 3, rounded to a whole number), and
+- whether each of those steals happens on the north or the south side of the
+  rink (a coin flip each).
+
+The skater with the puck dribbles it round the rink and the other comes to
+meet them head on and goes for it. Whoever comes away without the puck stops,
+turns round and gives chase, catching up to steal it on the side of the rink
+that was drawn, and the skater who loses it chases in turn. After the last
+change of possession, the carrier shoots the next time they reach half ice:
+Team A on the west goal, Team B on the east goal.
+
+Press SPACE to play another, ESC to quit.
 """
 import bisect
 import math
+import random
 from pathlib import Path
 
 import pygame
@@ -22,10 +33,12 @@ RINK_IMAGE = ASSETS / "Ice Hockey Rink Tile Set" / "NES_IceHockey_IceRink_WithGo
 TEAM_A_SKATE_FRAMES = ASSETS / "Team A Type 1" / "Skate Frames"
 TEAM_A_SHOOT_FRAMES = ASSETS / "Team A Type 1" / "Shoot Frames"
 TEAM_B_SKATE_FRAMES = ASSETS / "Team B Type 1" / "Skate Frames"
+TEAM_B_SHOOT_FRAMES = ASSETS / "Team B Type 1" / "Shoot"
 
 FPS = 60
 SKATE_SPEED = 100     # pixels per second
 STRIDE_LENGTH = 12    # pixels travelled per animation frame
+TURN_AHEAD = 8        # skaters face the way the lap goes this many pixels ahead, turning into bends early
 START_PAUSE = 1.0     # seconds to stand still before setting off
 DRIBBLE_LENGTH = 48   # pixels skated between touches of the puck
 DRIBBLE_REACH = 10    # furthest the puck gets ahead of the stick, in pixels
@@ -34,18 +47,25 @@ SWING_TIME = 0.08     # seconds on the downswing frame before the puck is struck
 PUCK_SPEED = 360      # pixels per second once shot
 
 # Setting off together, the two skaters would meet head on behind the west
-# goal, where there is no room to get past each other. Team B waits a little
-# so they meet on open ice at the bottom left instead.
-TEAM_B_START_DELAY = 2.5  # seconds after Team A sets off
-STEAL_GAP = 28        # how far apart the skaters are when Team B's stick reaches the puck
+# goal, where there is no room to get past each other. Whoever starts without
+# the puck waits a little so they meet on open ice in the west half instead.
+DEFENDER_START_DELAY = 2.5  # seconds after the skater with the puck sets off
+STEAL_GAP = 28        # how far apart the skaters are when the defender's stick reaches the puck
 HANDOFF_TIME = 0.12   # seconds for the puck to slide onto a new stick or blade position
 PASS_WIDTH = 16       # how far a skater swings towards the middle of the rink to get round the other
 PASS_RANGE = 40       # they swing out over this distance either side of the other skater
-STOP_DISTANCE = 12    # pixels Team A slides while stopping after losing the puck
+STOP_DISTANCE = 12    # pixels a skater slides while stopping from skating speed
 TURN_STEP_TIME = 0.08 # seconds on each direction frame while turning round
-CHASE_SPEED = 120     # Team A skates faster when chasing, so they catch up
+CHASE_SPEED = 120     # top speed chasing the puck, faster than carrying it so the chaser catches up
 ACCELERATION = 250    # pixels per second per second, setting off on the chase
-CHASE_GAP = 40        # closest Team B gets behind Team A when Team A stops to shoot
+CHASE_GAP = 40        # closest the chaser gets behind the carrier once there are no steals left
+
+# The random play, and where on the ice its steals happen.
+MEAN_CHANGES = 3      # average number of changes of possession after the first steal attempt
+MIN_CHASE = 450       # pixels the carrier skates, at least, from one steal to the next
+MAX_WAIT = 0.75       # seconds a skater who has lost the puck stands, at most, before chasing
+STEAL_REACH = 160     # steals happen within this many pixels of half ice, clear of the corners
+MIN_CARRY = 60        # pixels the last carrier skates, at least, before shooting
 
 # Compass names in order of angle / 45 degrees (0 = east, counter-clockwise),
 # matching the Team_?_T1_PSkate_<Direction>_strip4.png file names.
@@ -60,8 +80,10 @@ PUCK_PIXELS = [".##.",
                "####",
                ".##."]
 
-# Inside the west goal's net, just behind the goal line.
-SHOT_TARGET = (99, 122)
+# Inside each goal's net, just behind the goal line. Team A shoots on the west
+# goal and Team B on the east goal.
+WEST_GOAL = (99, 122)
+EAST_GOAL = (612, 122)
 
 # The rink is drawn in perspective: the end boards lean outwards by half a pixel
 # for every pixel further down the screen. The lap is planned in a flat "rink
@@ -129,6 +151,9 @@ class Lap:
         dx, dy = x1 - x0, y1 - y0
         length = self.distances[i + 1] - self.distances[i]
         t = (distance - self.distances[i]) / length
+        # Behind the goals, in towards the middle is into the net, so the
+        # swing fades out round the corners.
+        inset *= abs(dx) / length
         # Skating counter-clockwise, the middle of the rink is on the left.
         x = x0 + dx * t + inset * dy / length
         y = y0 + dy * t - inset * dx / length
@@ -137,16 +162,18 @@ class Lap:
         return rink_to_screen(x, y), facing(dx, dy)
 
 
-def load_strip(path, count):
+def load_strip(path, count, mirror=False):
     """A strip's frames, the middle of the helmet and the pixel row the feet stand on.
 
     Frames are lined up on the helmet so the body stays put when the skater
     changes direction, and stood on the feet, which are lower in the taller
-    South strip.
+    South strip. Mirrored frames face the other way.
     """
     strip = pygame.image.load(path).convert_alpha()
     width = strip.get_width() // count
     frames = [strip.subsurface((i * width, 0, width, strip.get_height())) for i in range(count)]
+    if mirror:
+        frames = [pygame.transform.flip(frame, True, False) for frame in frames]
     top = frames[0].get_bounding_rect().top
     helmet = [x for x in range(width) if frames[0].get_at((x, top)).a]
     return frames, (helmet[0] + helmet[-1]) // 2, strip.get_bounding_rect().bottom
@@ -165,24 +192,73 @@ def make_puck():
     return puck
 
 
+def draw_outcome():
+    """Draw how a play goes: which team starts with the puck, whether the first
+    steal attempt works, and the side of the rink, north or south, of each
+    change of possession after that."""
+    starter = "A" if random.random() < 0.5 else "B"
+    first_steal = random.random() < 0.5
+    # The exponential distribution gives any number, not just whole ones, so
+    # round it. That keeps the average number of changes close to MEAN_CHANGES.
+    changes = round(random.expovariate(1 / MEAN_CHANGES))
+    sides = ["north" if random.random() < 0.5 else "south" for _ in range(changes)]
+    return starter, first_steal, sides
+
+
+def describe(outcome):
+    starter, first_steal, sides = outcome
+    other = {"A": "B", "B": "A"}
+    holder = other[starter] if first_steal else starter
+    if len(sides) % 2:
+        holder = other[holder]
+    if not sides:
+        changes = "After that the puck doesn't change hands."
+    else:
+        times = "once" if len(sides) == 1 else f"{len(sides)} times"
+        changes = f"After that it changes hands {times}: {', '.join(sides)}."
+    return (f"Team {starter} starts with the puck. Team {other[starter]}'s first steal attempt "
+            f"{'works' if first_steal else 'misses'}.\n{changes}\n"
+            f"Team {holder} shoots on the {'west' if holder == 'A' else 'east'} goal.")
+
+
 class Skater:
     """A skater on the lap, skating counter-clockwise (heading 1) or clockwise (heading -1)."""
 
-    def __init__(self, lap, strips, distance, heading, shooter=None):
+    def __init__(self, lap, strips, shooter, goal, distance, heading):
         self.lap = lap
         self.strips = strips
-        self.shooter = shooter
+        self.shooter = shooter    # shooting frames, facing the goal they shoot at
+        self.goal = goal          # where in the net their shot ends up
         self.distance = distance  # how far counter-clockwise round the lap from the top middle
         self.heading = heading
+        self.state = "waiting"
+        self.state_time = 0.0     # seconds since the state last changed
+        self.then = None          # state to go into after stopping
+        self.set_off = START_PAUSE
         self.speed = 0.0
+        self.top_speed = CHASE_SPEED
         self.travelled = 0.0      # total distance skated, which drives the stride animation
         self.inset = 0.0          # how far in from the lap towards the middle of the rink
+        self.turn_from = None     # direction faced when they started turning round on the spot
         self.turned_to = None     # direction faced while turning round on the spot
         self.shot_frame = None    # frame of the shooter strip shown while shooting
+
+    def enter(self, state, then=None):
+        self.state = state
+        self.state_time = 0.0
+        self.then = then
+        if state == "turning":
+            self.turn_from = self.direction()
+        elif state == "shooting":
+            self.shot_frame = 0
 
     def skate(self, step):
         self.distance += self.heading * step
         self.travelled += step
+
+    def progress(self):
+        """How far round the lap the skater is, counted in the direction they are heading."""
+        return self.distance * self.heading
 
     def position(self, ahead=0):
         return self.lap.locate(self.distance + self.heading * ahead, self.inset)[0]
@@ -190,7 +266,9 @@ class Skater:
     def direction(self):
         if self.turned_to is not None:
             return self.turned_to
-        _, direction = self.lap.locate(self.distance)
+        # Turning in early also keeps the puck, out on the stick, off the
+        # boards coming out of the corners.
+        _, direction = self.lap.locate(self.distance + self.heading * TURN_AHEAD)
         return direction if self.heading > 0 else (direction + 4) % len(DIRECTIONS)
 
     def image(self):
@@ -203,28 +281,39 @@ class Skater:
 
 
 class Game:
-    def __init__(self, lap, team_a, team_a_shooter, team_b):
+    """One play, set up from an outcome made by draw_outcome()."""
+
+    def __init__(self, lap, team_a, team_b, outcome):
         self.lap = lap
-        self.a = Skater(lap, team_a, 0, 1, team_a_shooter)
-        self.b = Skater(lap, team_b, lap.length / 2, -1)
+        # Team A goes round counter-clockwise from the top middle and Team B
+        # clockwise from the bottom middle, so both start off heading west.
+        self.a = Skater(lap, *team_a, WEST_GOAL, 0, 1)
+        self.b = Skater(lap, *team_b, EAST_GOAL, lap.length / 2, -1)
+        starter, self.first_steal, sides = outcome
+        self.sides = list(sides)  # side of the rink of each steal still to come
+        self.carrier = self.a if starter == "A" else self.b
+        self.defender = self.b if starter == "A" else self.a  # until they have gone for the puck
+        self.defender.set_off += DEFENDER_START_DELAY
+        self.chaser = None
+        # Whoever has the puck after the first steal attempt swings round the other.
+        self.passer = self.defender if self.first_steal else self.carrier
+        # Distances round the lap from here on are counted in the direction the
+        # carrier is heading, like Skater.progress().
+        self.target = None          # where the next steal happens
+        self.shot_spot = None       # where the last carrier shoots from
+        self.turn_to_shoot = False  # whether they get there skating away from their goal
         self.time = 0.0
-        self.a_state = "dribbling"
-        self.b_state = "waiting"
-        self.turn_time = 0.0
-        self.turn_from = None
-        self.passer = None        # the skater swinging out to get round the other
-        # Team A shoots from half ice at the bottom, half a lap clockwise from
-        # the top middle, which takes them round behind the east goal.
-        self.shot_spot = -lap.length / 2
-        self.shot_time = None
-        self.shot_from = None
-        # Whoever has the puck, how far they had skated when they got it and
-        # how far they skate between touches.
-        self.carrier = self.a
+        # How far the carrier had skated when they got the puck and how far
+        # they skate between touches.
         self.dribble_from = 0.0
         self.touch_length = DRIBBLE_LENGTH
         self.handoff_from = None
         self.handoff_time = HANDOFF_TIME
+        self.shot_from = self.shot_target = self.struck_at = None
+
+    def phase(self):
+        """How far through the current touch of the puck the carrier is, from 0 to 1."""
+        return (self.carrier.travelled - self.dribble_from) / self.touch_length % 1
 
     def lead(self):
         """How far the puck has run ahead of the carrier's stick.
@@ -232,107 +321,196 @@ class Game:
         Each touch pushes the puck ahead faster than the skater, then it slows
         down steadily until the skater catches it on the stick again.
         """
-        phase = (self.carrier.travelled - self.dribble_from) / self.touch_length % 1
+        phase = self.phase()
         return 4 * DRIBBLE_REACH * phase * (1 - phase)
 
-    def take_puck(self, skater, remaining=None):
-        """Give the puck to a skater. If they stop after skating a remaining
-        distance, a whole number of touches fit in so it ends on the stick."""
+    def take_puck(self, skater):
         self.carrier = skater
         self.dribble_from = skater.travelled
-        if remaining is None:
-            self.touch_length = DRIBBLE_LENGTH
-        else:
-            self.touch_length = remaining / max(round(remaining / DRIBBLE_LENGTH), 1)
+        self.touch_length = DRIBBLE_LENGTH
+
+    def fit_touches(self, remaining):
+        """Fit a whole number of touches into the rest of the carry, so the puck is
+        back on the stick when the carrier stops, without moving it now."""
+        phase = self.phase()
+        touches = max(round(remaining / DRIBBLE_LENGTH + phase), 1)
+        self.touch_length = remaining / (touches - phase)
+        self.dribble_from = self.carrier.travelled - phase * self.touch_length
+
+    def faces_goal(self, skater, side, heading):
+        """Whether a skater going round this way faces the goal they shoot at when
+        crossing half ice on this side. Counter-clockwise is west along the north side."""
+        west = (side == "north") == (heading > 0)
+        return west == (skater.goal[0] < RINK_CENTER_X)
+
+    def steal_spot(self, side, start, last):
+        """Where the next steal happens.
+
+        It is on the given side of the rink, near enough half ice to be clear of
+        the corners, and at least MIN_CHASE on from start so the skater who has
+        just lost the puck has time to catch up. The last steal is kept to the
+        side of half ice that has the new carrier facing their goal when they
+        next cross half ice, which is where they shoot from.
+        """
+        length = self.lap.length
+        middle = 0 if side == "north" else length / 2
+        low, high = -STEAL_REACH, STEAL_REACH
+        if last:
+            if self.faces_goal(self.chaser, side, self.carrier.heading):
+                high = -MIN_CARRY
+            else:
+                low = MIN_CARRY
+        earliest = start + MIN_CHASE
+        # The first time round that this side's stretch ends past the earliest point.
+        middle += math.ceil((earliest - high - middle) / length) * length
+        return max(middle + low, earliest)
+
+    def plan(self):
+        """After a change of possession, or the first attempt at one, work out where
+        the next steal happens or, after the last, where the carrier shoots from."""
+        start = self.carrier.progress()
+        if self.sides:
+            side = self.sides.pop(0)
+            self.target = self.steal_spot(side, start, last=not self.sides)
+            return
+        self.target = None
+        # Half ice comes round every half lap, at the top middle and the bottom middle.
+        half = self.lap.length / 2
+        halves = math.floor(start / half) + 1
+        self.shot_spot = halves * half
+        side = "north" if halves % 2 == 0 else "south"
+        self.turn_to_shoot = not self.faces_goal(self.carrier, side, self.carrier.heading)
+        self.fit_touches(self.shot_spot - start)
+
+    def chase_speed(self, skater):
+        """Top speed a skater needs, setting off now from a standstill, to catch the
+        carrier just as they reach the next steal. Flat out after the last steal."""
+        if self.target is None:
+            return CHASE_SPEED
+        time = (self.target - self.carrier.progress()) / SKATE_SPEED
+        distance = self.target - skater.progress()
+        # Speeding up to v and holding it covers v * time - v**2 / 2a, so solve for v.
+        a = ACCELERATION
+        return a * time - math.sqrt(max((a * time) ** 2 - 2 * a * distance, 0))
 
     def update(self, dt):
         self.time += dt
         self.handoff_time += dt
-        a, b = self.a, self.b
         puck_before = self.puck_position()
         holder_before = self.holder()
 
-        # Team A dribbles counter-clockwise until the puck is stolen, slides to
-        # a stop, turns round and chases Team B. Once they have the puck back
-        # they carry on round the east goal and shoot from half ice.
-        if self.a_state == "dribbling":
-            if self.time > START_PAUSE:
-                a.speed = SKATE_SPEED
-                a.skate(a.speed * dt)
-        elif self.a_state == "stopping":
-            a.speed = max(a.speed - SKATE_SPEED ** 2 / (2 * STOP_DISTANCE) * dt, 0)
-            a.skate(a.speed * dt)
-            if a.speed == 0:
-                self.a_state = "turning"
-                self.turn_from = a.direction()
-        elif self.a_state == "turning":
-            # Turn towards the middle of the rink, which is on the skater's
-            # left going counter-clockwise, showing each direction on the way.
-            self.turn_time += dt
-            steps = int(self.turn_time / TURN_STEP_TIME)
-            if steps < len(DIRECTIONS) // 2:
-                a.turned_to = (self.turn_from + a.heading * steps) % len(DIRECTIONS)
-            else:
-                a.turned_to = None
-                a.heading = -a.heading
-                self.a_state = "chasing"
-                self.passer = a
-        elif self.a_state == "chasing":
-            a.speed = min(a.speed + ACCELERATION * dt, CHASE_SPEED)
-            a.skate(a.speed * dt)
-        elif self.a_state == "carrying":
-            a.skate(min(a.speed * dt, a.distance - self.shot_spot))
-            if a.distance == self.shot_spot:
-                self.a_state = "shooting"
-                self.shot_time = 0.0
-                a.shot_frame = 0
-        elif self.a_state == "shooting":
-            self.shot_time += dt
-            if self.shot_time < WINDUP_TIME:
-                a.shot_frame = 0
-            elif self.shot_time < WINDUP_TIME + SWING_TIME:
-                a.shot_frame = 1
-            else:
-                a.shot_frame = 2
-                if self.carrier is a:
-                    self.shot_from = self.puck_position()
-                    self.carrier = None
-
-        # Team B waits, then skates clockwise round the rink, chasing Team A
-        # once they have lost the puck.
-        if self.b_state == "waiting":
-            if self.time > START_PAUSE + TEAM_B_START_DELAY:
-                self.b_state = "skating"
-        elif self.b_state == "skating":
-            b.skate(SKATE_SPEED * dt)
-        elif self.b_state == "chasing":
-            room = b.distance - a.distance - CHASE_GAP
-            b.skate(max(min(SKATE_SPEED * dt, room), 0))
-
-        # Team B steals the puck when their stick reaches it, and Team A steals
-        # it back when they draw level.
-        if self.a_state == "dribbling" and b.distance - a.distance <= STEAL_GAP + self.lead():
-            self.take_puck(b)
-            self.passer = b
-            self.a_state = "stopping"
-        if self.a_state == "chasing" and a.distance <= b.distance:
-            self.take_puck(a, a.distance - self.shot_spot)
-            self.a_state = "carrying"
-            self.b_state = "chasing"
-
-        # Whoever is getting round the other swings in towards the middle of the rink.
-        for skater, other in ((a, b), (b, a)):
-            gap = (other.distance - skater.distance) * skater.heading
-            if skater is self.passer and abs(gap) < PASS_RANGE:
-                skater.inset = PASS_WIDTH * (1 + math.cos(math.pi * gap / PASS_RANGE)) / 2
-            else:
-                skater.inset = 0
+        for skater, other in ((self.a, self.b), (self.b, self.a)):
+            self.move(skater, other, dt)
+        self.contest()
+        self.swing()
 
         # When the puck is stolen, or its carrier turns and their blade moves,
         # the puck slides across to its new place on the stick.
         if self.carrier is not None and self.holder() != holder_before:
             self.handoff_from = puck_before
             self.handoff_time = 0.0
+
+    def move(self, skater, other, dt):
+        skater.state_time += dt
+        if skater.state == "waiting":
+            if self.time > skater.set_off:
+                skater.enter("skating")
+        elif skater.state == "skating":
+            skater.speed = SKATE_SPEED
+            step = skater.speed * dt
+            if skater is self.carrier and self.shot_spot is not None:
+                to_go = self.shot_spot - skater.progress()
+                if self.turn_to_shoot and to_go - step <= STOP_DISTANCE:
+                    # Skating away from their goal, so stop on half ice and turn round.
+                    skater.enter("stopping", then="turning")
+                elif step >= to_go:
+                    step = to_go
+                    skater.enter("shooting")
+            skater.skate(step)
+        elif skater.state == "stopping":
+            skater.speed = max(skater.speed - SKATE_SPEED ** 2 / (2 * STOP_DISTANCE) * dt, 0)
+            skater.skate(skater.speed * dt)
+            if skater.speed == 0:
+                skater.enter(skater.then)
+        elif skater.state == "turning":
+            # Turn towards the middle of the rink, which is on the skater's
+            # left going counter-clockwise, showing each direction on the way.
+            steps = int(skater.state_time / TURN_STEP_TIME)
+            if steps < len(DIRECTIONS) // 2:
+                skater.turned_to = (skater.turn_from + skater.heading * steps) % len(DIRECTIONS)
+            else:
+                skater.turned_to = None
+                skater.heading = -skater.heading
+                # The carrier has turned to face their goal, anyone else to chase.
+                skater.enter("shooting" if skater is self.carrier else "recovering")
+        elif skater.state == "recovering":
+            # Set off after the carrier in time to catch them where the next
+            # steal is due: flat out, or after a breather, a little slower.
+            speed = self.chase_speed(skater)
+            if speed >= CHASE_SPEED or skater.state_time >= MAX_WAIT:
+                skater.top_speed = min(speed, CHASE_SPEED)
+                skater.enter("chasing")
+        elif skater.state == "chasing":
+            skater.speed = min(skater.speed + ACCELERATION * dt, skater.top_speed)
+            step = skater.speed * dt
+            ahead = (other.distance - skater.distance) * skater.heading
+            if self.target is None:
+                if self.turn_to_shoot and other.state != "skating":
+                    # The shooter has stopped to turn round, so skate on past them.
+                    if ahead <= -PASS_RANGE:
+                        skater.enter("stopping", then="standing")
+                else:
+                    # No steals left: close in, but leave the carrier room to shoot.
+                    step = max(min(step, ahead - CHASE_GAP), 0)
+            skater.skate(step)
+        elif skater.state == "shooting":
+            if skater.state_time < WINDUP_TIME:
+                skater.shot_frame = 0
+            elif skater.state_time < WINDUP_TIME + SWING_TIME:
+                skater.shot_frame = 1
+            else:
+                skater.shot_frame = 2
+                if self.carrier is skater:
+                    self.shot_from = self.puck_position()
+                    self.shot_target = skater.goal
+                    self.struck_at = self.time
+                    self.carrier = None
+
+    def contest(self):
+        """The defender going for the puck head on, then the chaser catching the carrier."""
+        carrier, chaser = self.carrier, self.chaser
+        if carrier is None:
+            return
+        if self.defender is not None:
+            ahead = (self.defender.distance - carrier.distance) * carrier.heading
+            if ahead <= STEAL_GAP + self.lead():
+                # The defender's stick reaches the puck. Whoever comes away
+                # without it slides to a stop and turns round to chase.
+                loser = carrier if self.first_steal else self.defender
+                if self.first_steal:
+                    self.take_puck(self.defender)
+                loser.enter("stopping", then="turning")
+                self.chaser, self.defender = loser, None
+                self.plan()
+        elif self.target is not None and chaser.state == "chasing" and chaser.progress() >= carrier.progress():
+            # The chaser draws level on the inside and takes the puck.
+            self.take_puck(chaser)
+            chaser.enter("skating")
+            carrier.enter("stopping", then="recovering")
+            self.chaser = carrier
+            self.plan()
+
+    def swing(self):
+        """Whoever is getting round the other swings in towards the middle of the rink."""
+        gap = abs(self.b.distance - self.a.distance)
+        if self.chaser is not None and gap >= PASS_RANGE:
+            # Once the two are clear of each other, the chaser is next to get round.
+            self.passer = self.chaser
+        for skater in (self.a, self.b):
+            if skater is self.passer and gap < PASS_RANGE:
+                skater.inset = PASS_WIDTH * (1 + math.cos(math.pi * gap / PASS_RANGE)) / 2
+            else:
+                skater.inset = 0
 
     def holder(self):
         """Who has the puck and which way they face, which sets where the blade is."""
@@ -350,8 +528,8 @@ class Game:
             return x, y
         # Shot: the puck flies in a straight line from the stick and stops in the net.
         from_x, from_y = self.shot_from
-        target_x, target_y = SHOT_TARGET
-        flight = (self.shot_time - WINDUP_TIME - SWING_TIME) * PUCK_SPEED
+        target_x, target_y = self.shot_target
+        flight = (self.time - self.struck_at) * PUCK_SPEED
         t = min(flight / math.hypot(target_x - from_x, target_y - from_y), 1)
         return from_x + (target_x - from_x) * t, from_y + (target_y - from_y) * t
 
@@ -378,13 +556,21 @@ def main():
     pygame.display.set_caption("NES Ice Hockey - steal and shoot")
     rink = rink.convert()
     lap = Lap(build_lap())
-    team_a = load_skater(TEAM_A_SKATE_FRAMES, "A")
-    team_a_shooter = load_strip(TEAM_A_SHOOT_FRAMES / "Team_A_T1_Shoot_West_strip3.png", 3)
-    team_b = load_skater(TEAM_B_SKATE_FRAMES, "B")
+    team_a = (load_skater(TEAM_A_SKATE_FRAMES, "A"),
+              load_strip(TEAM_A_SHOOT_FRAMES / "Team_A_T1_Shoot_West_strip3.png", 3))
+    # Team B's East shooting strip in the pack is a copy of the West one, so
+    # mirror the West one instead.
+    team_b = (load_skater(TEAM_B_SKATE_FRAMES, "B"),
+              load_strip(TEAM_B_SHOOT_FRAMES / "Team_B_T1_Shoot_West_strip3.png", 3, mirror=True))
     puck = make_puck()
     clock = pygame.time.Clock()
 
-    game = Game(lap, team_a, team_a_shooter, team_b)
+    def play():
+        outcome = draw_outcome()
+        print(describe(outcome), end="\n\n")
+        return Game(lap, team_a, team_b, outcome)
+
+    game = play()
     running = True
     while running:
         # Cap the step so dragging the window doesn't make the skaters jump.
@@ -395,7 +581,7 @@ def main():
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                game = Game(lap, team_a, team_a_shooter, team_b)
+                game = play()
 
         game.update(dt)
         game.draw(screen, rink, puck)
