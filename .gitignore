@@ -1,0 +1,3 @@
+# pygbag's web build and download cache
+build/
+__pycache__/

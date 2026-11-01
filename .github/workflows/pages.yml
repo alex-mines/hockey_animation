@@ -1,0 +1,57 @@
+# Builds the animation into a web page with pygbag and publishes it on GitHub
+# Pages: web/index.html, with the seed box, at the top and the game in game/.
+name: Publish to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      # --no_opt keeps the sprites exactly as they are: on Linux pygbag would
+      # otherwise recompress the PNGs lossily. --ume_block 0 starts without
+      # waiting for a click, and --can_close 1 stops the game page asking
+      # "are you sure?" whenever Play loads a new one. pygbag.ini lists what
+      # to leave out of the game's files.
+      - name: Build the game with pygbag
+        run: >
+          uv run --locked pygbag --build --no_opt --ume_block 0 --can_close 1
+          --app_name hockey_animation --title "NES Ice Hockey" .
+
+      - name: Put the site together
+        run: |
+          mkdir -p _site/game
+          cp web/index.html _site/
+          cp build/web/* _site/game/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

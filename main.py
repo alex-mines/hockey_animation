@@ -19,11 +19,20 @@ that was drawn, and the skater who loses it chases in turn. After the last
 change of possession, the carrier shoots the next time they reach half ice:
 Team A on the west goal, Team B on the east goal.
 
-Press SPACE to play another, ESC to quit.
+Every play comes from a seed, so the same seed always plays out the same way.
+Run `uv run main.py 42` to watch seed 42; without a seed each play gets a
+random one, printed with what was drawn. Press SPACE to play again (the same
+seed if one was given, otherwise a new one), ESC to quit.
+
+It also runs in a web browser: pygbag builds it into a web page, where the
+seed comes from ?seed=42 on the end of the game's address (see web/index.html).
 """
+import asyncio
 import bisect
 import math
 import random
+import sys
+import urllib.parse
 from pathlib import Path
 
 import pygame
@@ -61,6 +70,7 @@ ACCELERATION = 250    # pixels per second per second, setting off on the chase
 CHASE_GAP = 40        # closest the chaser gets behind the carrier once there are no steals left
 
 # The random play, and where on the ice its steals happen.
+SEEDS = 1_000_000     # random seeds are picked from 0 up to this
 MEAN_CHANGES = 3      # average number of changes of possession after the first steal attempt
 MIN_CHASE = 450       # pixels the carrier skates, at least, from one steal to the next
 MAX_WAIT = 0.75       # seconds a skater who has lost the puck stands, at most, before chasing
@@ -192,17 +202,30 @@ def make_puck():
     return puck
 
 
-def draw_outcome():
+def draw_outcome(seed):
     """Draw how a play goes: which team starts with the puck, whether the first
     steal attempt works, and the side of the rink, north or south, of each
     change of possession after that."""
-    starter = "A" if random.random() < 0.5 else "B"
-    first_steal = random.random() < 0.5
+    rng = random.Random(seed)
+    starter = "A" if rng.random() < 0.5 else "B"
+    first_steal = rng.random() < 0.5
     # The exponential distribution gives any number, not just whole ones, so
     # round it. That keeps the average number of changes close to MEAN_CHANGES.
-    changes = round(random.expovariate(1 / MEAN_CHANGES))
-    sides = ["north" if random.random() < 0.5 else "south" for _ in range(changes)]
+    changes = round(rng.expovariate(1 / MEAN_CHANGES))
+    sides = ["north" if rng.random() < 0.5 else "south" for _ in range(changes)]
     return starter, first_steal, sides
+
+
+def given_seed():
+    """The seed asked for, if any: the first command-line argument or, in a web
+    browser, ?seed= on the end of the page's address."""
+    if sys.platform == "emscripten":
+        import platform  # pygbag's version, which reaches into the web page
+        query = urllib.parse.parse_qs(str(platform.window.location.search).lstrip("?"))
+        text = query.get("seed", [""])[0]
+    else:
+        text = sys.argv[1] if len(sys.argv) > 1 else ""
+    return int(text) if text.isdigit() else None
 
 
 def describe(outcome):
@@ -548,7 +571,7 @@ class Game:
             screen.blit(image, position)
 
 
-def main():
+async def main():
     pygame.init()
     rink = pygame.image.load(RINK_IMAGE)
     # SCALED blows the small NES-sized window up by a whole-number factor.
@@ -564,10 +587,12 @@ def main():
               load_strip(TEAM_B_SHOOT_FRAMES / "Team_B_T1_Shoot_West_strip3.png", 3, mirror=True))
     puck = make_puck()
     clock = pygame.time.Clock()
+    seed = given_seed()
 
     def play():
-        outcome = draw_outcome()
-        print(describe(outcome), end="\n\n")
+        play_seed = seed if seed is not None else random.randrange(SEEDS)
+        outcome = draw_outcome(play_seed)
+        print(f"Seed {play_seed}. {describe(outcome)}", end="\n\n")
         return Game(lap, team_a, team_b, outcome)
 
     game = play()
@@ -586,9 +611,11 @@ def main():
         game.update(dt)
         game.draw(screen, rink, puck)
         pygame.display.flip()
+        # In a web browser, nothing is shown until Python hands control back.
+        await asyncio.sleep(0)
 
     pygame.quit()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
