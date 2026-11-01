@@ -20,19 +20,19 @@ change of possession, the carrier shoots the next time they reach half ice:
 Team A on the west goal, Team B on the east goal.
 
 Every play comes from a seed, so the same seed always plays out the same way.
-Run `uv run main.py 42` to watch seed 42; without a seed each play gets a
-random one, printed with what was drawn. Press SPACE to play again (the same
-seed if one was given, otherwise a new one), ESC to quit.
+Each play is seeded with the time it starts, printed with what was drawn; run
+`uv run main.py 42` to watch seed 42 instead. Press SPACE to play again (the
+same seed if one was given, otherwise a new one), ESC to quit.
 
-It also runs in a web browser: pygbag builds it into a web page, where the
-seed comes from ?seed=42 on the end of the game's address (see web/index.html).
+It also runs in a web browser: pygbag builds it into a web page (see
+web/index.html).
 """
 import asyncio
 import bisect
 import math
 import random
 import sys
-import urllib.parse
+import time
 from pathlib import Path
 
 import pygame
@@ -70,7 +70,6 @@ ACCELERATION = 250    # pixels per second per second, setting off on the chase
 CHASE_GAP = 40        # closest the chaser gets behind the carrier once there are no steals left
 
 # The random play, and where on the ice its steals happen.
-SEEDS = 1_000_000     # random seeds are picked from 0 up to this
 MEAN_CHANGES = 3      # average number of changes of possession after the first steal attempt
 MIN_CHASE = 450       # pixels the carrier skates, at least, from one steal to the next
 MAX_WAIT = 0.75       # seconds a skater who has lost the puck stands, at most, before chasing
@@ -217,14 +216,8 @@ def draw_outcome(seed):
 
 
 def given_seed():
-    """The seed asked for, if any: the first command-line argument or, in a web
-    browser, ?seed= on the end of the page's address."""
-    if sys.platform == "emscripten":
-        import platform  # pygbag's version, which reaches into the web page
-        query = urllib.parse.parse_qs(str(platform.window.location.search).lstrip("?"))
-        text = query.get("seed", [""])[0]
-    else:
-        text = sys.argv[1] if len(sys.argv) > 1 else ""
+    """The seed asked for on the command line, if any."""
+    text = sys.argv[1] if len(sys.argv) > 1 else ""
     return int(text) if text.isdigit() else None
 
 
@@ -590,7 +583,8 @@ async def main():
     seed = given_seed()
 
     def play():
-        play_seed = seed if seed is not None else random.randrange(SEEDS)
+        # Without a seed from the command line, use the time it starts, in milliseconds.
+        play_seed = seed if seed is not None else time.time_ns() // 1_000_000
         outcome = draw_outcome(play_seed)
         print(f"Seed {play_seed}. {describe(outcome)}", end="\n\n")
         return Game(lap, team_a, team_b, outcome)

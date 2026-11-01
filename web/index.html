@@ -3,72 +3,54 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NES Ice Hockey: steal and shoot</title>
+  <title>Hockey Race!</title>
   <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
   <style>
     body {
+      box-sizing: border-box;
+      min-height: 100vh;
       margin: 0;
-      background: #10141c;
-      color: #e8eaf0;
-      font-family: system-ui, sans-serif;
-    }
-    main {
-      max-width: 1424px;
-      margin: 0 auto;
-      padding: 24px 16px;
+      padding: 32px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 40px;
+      font-family: "Press Start 2P", monospace;
+      color: #fff;
+      /* An ice-blue arena with a dusting of snow. */
+      background:
+        radial-gradient(rgba(255, 255, 255, 0.18) 1px, transparent 1.5px) 0 0 / 24px 24px,
+        linear-gradient(160deg, #0b1f4d 0%, #1d4ed8 55%, #38bdf8 100%) fixed;
     }
     h1 {
-      font-size: 1.5rem;
-      margin: 0 0 8px;
+      margin: 0;
+      font-size: clamp(1.75rem, 6.5vw, 4.5rem);
+      line-height: 1.2;
+      text-align: center;
+      color: #ffd23f;
+      text-shadow: 0.06em 0.06em 0 #e63946, 0.12em 0.12em 0 #0b1f4d;
     }
-    p {
-      margin: 0 0 16px;
-      max-width: 70ch;
-      color: #b8bdc9;
-      line-height: 1.5;
-    }
-    form {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 16px;
-    }
-    label {
-      font-weight: 600;
-    }
-    input, button {
-      font: inherit;
-      padding: 6px 10px;
-      border-radius: 4px;
-      border: 1px solid #4a5163;
-    }
-    input {
-      width: 10ch;
-      background: #1c2230;
-      color: inherit;
-    }
-    button {
-      padding: 6px 18px;
-      background: #3d6fd8;
-      border-color: #3d6fd8;
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    button:hover {
-      background: #3561bf;
-    }
-    /* The same shape as the rink, 712 x 240 pixels. */
+    /* The game box: the shape of the rink, 712 x 240 pixels, framed like the
+       boards with a red stripe. */
     #stage {
       position: relative;
       display: grid;
       place-items: center;
+      width: min(1100px, 100% - 24px);
       aspect-ratio: 712 / 240;
-      width: 100%;
-      background: #000;
-      color: #8a90a0;
+      overflow: hidden;
+      border: 6px solid #f8fafc;
+      border-radius: 16px;
+      box-shadow: 0 0 0 6px #e63946, 0 20px 50px rgba(0, 0, 0, 0.45);
+      background: #0b1f4d;
+      color: #ffd23f;
+      font-size: clamp(0.7rem, 1.8vw, 1.1rem);
     }
-    /* The game covers the "Loading..." message once it has been restyled, below. */
+    /* The game sits over the "Loading..." message and hides it once it draws. */
     #stage iframe {
       position: absolute;
       inset: 0;
@@ -77,53 +59,80 @@
       border: 0;
       visibility: hidden;
     }
+    .blink {
+      animation: blink 1s steps(2, jump-none) infinite;
+    }
+    @keyframes blink {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+    button {
+      font: inherit;
+      font-size: clamp(1rem, 2.5vw, 1.5rem);
+      padding: 0.9em 2em;
+      color: #fff;
+      background: #e63946;
+      border: 0;
+      border-radius: 12px;
+      box-shadow: 0 6px 0 #9b1c27, 0 12px 24px rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+      transition: transform 0.08s, box-shadow 0.08s;
+    }
+    button:hover {
+      background: #f25260;
+    }
+    button:active {
+      transform: translateY(4px);
+      box-shadow: 0 2px 0 #9b1c27, 0 6px 12px rgba(0, 0, 0, 0.35);
+    }
+    button:focus-visible {
+      outline: 4px solid #ffd23f;
+      outline-offset: 6px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .blink {
+        animation: none;
+      }
+    }
   </style>
 </head>
 <body>
-<main>
-  <h1>NES Ice Hockey: steal and shoot</h1>
-  <p>
-    Two skaters fight for the puck. The seed decides who starts with it, whether
-    the first steal works, how many times it changes hands and where, so the same
-    seed always plays out the same way. The first play takes a few seconds to
-    load while Python starts up in the browser.
-  </p>
-  <form id="controls">
-    <label for="seed">Seed</label>
-    <input id="seed" type="number" min="0" step="1" required>
-    <button type="submit">Play</button>
-  </form>
-  <div id="stage">Enter a seed and press Play.</div>
-</main>
+  <h1>Hockey Race!</h1>
+  <div id="stage"><span class="blink">Press Play!</span></div>
+  <button id="play" type="button">Play</button>
 <script>
-  const seed = document.getElementById("seed");
   const stage = document.getElementById("stage");
-  // Start with a random seed, the same range main.py picks from.
-  seed.value = Math.floor(Math.random() * 1000000);
 
-  // pygbag's page, shown while Python loads and then around the game, dressed
-  // to match this one. Scaling the canvas up with pixelated keeps the pixel
-  // art sharp rather than blurred.
+  // pygbag's page around the game: see-through, so this page's "Loading..."
+  // shows until the game draws. The game fills the box, which is already the
+  // rink's shape (pygbag can size it before it knows the shape), scaled up
+  // with pixelated so the pixel art stays sharp rather than blurred.
   const gameStyle = `
-    body { background: #000 !important; }
-    #status, #infobox { background: none !important; color: #8a90a0 !important; }
-    canvas { image-rendering: pixelated !important; }
+    body { background: transparent !important; }
+    #transfer, #infobox { display: none !important; }
+    canvas {
+      width: 100% !important;
+      height: 100% !important;
+      image-rendering: pixelated !important;
+    }
   `;
 
-  // Each play loads the game, built by pygbag into game/, with the seed on
-  // the end of its address, where main.py reads it.
-  document.getElementById("controls").addEventListener("submit", (event) => {
-    event.preventDefault();
+  // Each play loads the game, built by pygbag into game/, afresh. It seeds
+  // itself with the time it starts.
+  document.getElementById("play").addEventListener("click", () => {
     const game = document.createElement("iframe");
     game.title = "Hockey animation";
-    game.src = "game/index.html?seed=" + encodeURIComponent(seed.value);
+    game.src = "game/index.html";
     game.addEventListener("load", () => {
       const style = game.contentDocument.createElement("style");
       style.textContent = gameStyle;
       game.contentDocument.head.append(style);
       game.style.visibility = "visible";
     });
-    stage.replaceChildren("Loading...", game);
+    const loading = document.createElement("span");
+    loading.className = "blink";
+    loading.textContent = "Loading...";
+    stage.replaceChildren(loading, game);
   });
 </script>
 </body>
