@@ -1,8 +1,8 @@
 """Example animation: two skaters fight for the puck, differently every time.
 
-A Team A (Type 1) skater starts at the top middle of the ice and a Team B
-(Type 1) skater at the bottom middle, both facing west. Each play is drawn at
-random:
+A Team A skater, in navy with maroon, starts at the top middle of the ice and
+a Team B skater, in black with yellow, at the bottom middle, both facing west.
+Each play is drawn at random:
 
 - which team starts with the puck (a coin flip),
 - whether the other team's first steal attempt works (a coin flip), which
@@ -29,6 +29,9 @@ Each play is seeded with the time it starts, printed with what was drawn; run
 `uv run main.py 42` to watch seed 42 instead. Press SPACE to play again (the
 same seed if one was given, otherwise a new one), ESC to quit.
 
+The skaters are the sprite pack's Type 1 skaters, painted in their teams'
+uniforms by make_uniforms.py.
+
 It also runs in a web browser: pygbag builds it into a web page (see
 web/index.html).
 """
@@ -44,10 +47,7 @@ import pygame
 
 ASSETS = Path(__file__).parent / "NES_Ice_Hockey_Full_Files" / "NES Ice Hockey Full Files"
 RINK_IMAGE = ASSETS / "Ice Hockey Rink Tile Set" / "NES_IceHockey_IceRink_WithGoal.png"
-TEAM_A_SKATE_FRAMES = ASSETS / "Team A Type 1" / "Skate Frames"
-TEAM_A_SHOOT_FRAMES = ASSETS / "Team A Type 1" / "Shoot Frames"
-TEAM_B_SKATE_FRAMES = ASSETS / "Team B Type 1" / "Skate Frames"
-TEAM_B_SHOOT_FRAMES = ASSETS / "Team B Type 1" / "Shoot"
+UNIFORMS = Path(__file__).parent / "uniforms"  # the pack's skaters in the teams' uniforms, see make_uniforms.py
 
 FPS = 60
 SKATE_SPEED = 100     # pixels per second
@@ -328,25 +328,23 @@ class Track:
         return [(start + low, start + high) for low, high in self.kind(lap).steals[side]]
 
 
-def load_strip(path, count, mirror=False):
+def load_strip(path, count):
     """A strip's frames, the middle of the helmet and the pixel row the feet stand on.
 
     Frames are lined up on the helmet so the body stays put when the skater
     changes direction, and stood on the feet, which are lower in the taller
-    South strip. Mirrored frames face the other way.
+    South strip.
     """
     strip = pygame.image.load(path).convert_alpha()
     width = strip.get_width() // count
     frames = [strip.subsurface((i * width, 0, width, strip.get_height())) for i in range(count)]
-    if mirror:
-        frames = [pygame.transform.flip(frame, True, False) for frame in frames]
     top = frames[0].get_bounding_rect().top
     helmet = [x for x in range(width) if frames[0].get_at((x, top)).a]
     return frames, (helmet[0] + helmet[-1]) // 2, strip.get_bounding_rect().bottom
 
 
-def load_skater(folder, team):
-    return [load_strip(folder / f"Team_{team}_T1_PSkate_{name}_strip4.png", 4) for name in DIRECTIONS]
+def load_skater(team):
+    return [load_strip(UNIFORMS / f"Team_{team}_Skate_{name}_strip4.png", 4) for name in DIRECTIONS]
 
 
 def make_puck():
@@ -784,12 +782,8 @@ async def main():
     screen = pygame.display.set_mode(rink.get_size(), pygame.SCALED)
     pygame.display.set_caption("NES Ice Hockey - steal and shoot")
     rink = rink.convert()
-    team_a =(load_skater(TEAM_A_SKATE_FRAMES, "A"),
-              load_strip(TEAM_A_SHOOT_FRAMES / "Team_A_T1_Shoot_West_strip3.png", 3))
-    # Team B's East shooting strip in the pack is a copy of the West one, so
-    # mirror the West one instead.
-    team_b = (load_skater(TEAM_B_SKATE_FRAMES, "B"),
-              load_strip(TEAM_B_SHOOT_FRAMES / "Team_B_T1_Shoot_West_strip3.png", 3, mirror=True))
+    team_a = (load_skater("A"), load_strip(UNIFORMS / "Team_A_Shoot_West_strip3.png", 3))
+    team_b = (load_skater("B"), load_strip(UNIFORMS / "Team_B_Shoot_East_strip3.png", 3))
     puck = make_puck()
     clock = pygame.time.Clock()
     seed = given_seed()
