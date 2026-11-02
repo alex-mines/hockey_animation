@@ -66,6 +66,33 @@
       from { opacity: 1; }
       to { opacity: 0; }
     }
+    /* The seed box and the Play button, side by side. */
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+    }
+    #seed {
+      box-sizing: border-box;
+      width: 9em;
+      font: inherit;
+      font-size: clamp(1rem, 2.5vw, 1.5rem);
+      padding: 0.9em 0.8em;
+      color: #0b1f4d;
+      background: #f8fafc;
+      border: 0;
+      border-radius: 12px;
+      box-shadow: inset 0 4px 0 rgba(11, 31, 77, 0.25), 0 12px 24px rgba(0, 0, 0, 0.35);
+    }
+    #seed::placeholder {
+      color: #64748b;
+    }
+    #seed:focus-visible {
+      outline: 4px solid #ffd23f;
+      outline-offset: 6px;
+    }
     button {
       font: inherit;
       font-size: clamp(1rem, 2.5vw, 1.5rem);
@@ -99,7 +126,12 @@
 <body>
   <h1>Hockey Race!</h1>
   <div id="stage"><span class="blink">Press Play!</span></div>
-  <button id="play" type="button">Play</button>
+  <form id="controls">
+    <input id="seed" type="text" inputmode="numeric" pattern="-?[0-9]+"
+           placeholder="Seed" aria-label="Seed" autocomplete="off"
+           title="A whole number. Leave it empty to seed the play with the time.">
+    <button id="play" type="submit">Play</button>
+  </form>
 <script>
   const stage = document.getElementById("stage");
 
@@ -122,13 +154,20 @@
   // .github/workflows/pages.yml). They all play the one game, in game/.
   const folder = new URL(".", location.href).pathname.split("/").at(-2);
   const winner = {red: "A", blue: "B"}[folder];
-  const gameAddress = winner ? `../game/index.html?winner=${winner}` : "game/index.html";
+  const gamePage = winner ? "../game/index.html" : "game/index.html";
+  const seedBox = document.getElementById("seed");
 
-  // Each play loads the game afresh. It seeds itself with the time it starts.
-  document.getElementById("play").addEventListener("click", () => {
+  // Each play loads the game afresh, with the seed in the box if there is one
+  // (the box only lets whole numbers through). With the box empty, the game
+  // seeds itself with the time it starts.
+  document.getElementById("controls").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const query = new URLSearchParams();
+    if (seedBox.value) query.set("seed", seedBox.value);
+    if (winner) query.set("winner", winner);
     const game = document.createElement("iframe");
     game.title = "Hockey animation";
-    game.src = gameAddress;
+    game.src = query.toString() ? `${gamePage}?${query}` : gamePage;
     game.addEventListener("load", () => {
       const style = game.contentDocument.createElement("style");
       style.textContent = gameStyle;

@@ -42,8 +42,8 @@ The skaters are the sprite pack's Type 1 skaters, painted in their teams'
 uniforms by make_uniforms.py.
 
 It also runs in a web browser: pygbag builds it into a web page (see
-web/index.html), where ?winner=A or ?winner=B on the end of the game's address
-fixes who wins.
+web/index.html), where ?seed=42 on the end of the game's address plays seed 42
+and ?winner=A or ?winner=B fixes who wins.
 """
 import argparse
 import asyncio
@@ -421,12 +421,17 @@ def draw_outcome(seed, winner=None):
 
 def given_options():
     """The seed and the team that always wins, if they were asked for: on the
-    command line or, in a web browser, ?winner= on the end of the game's address."""
+    command line or, in a web browser, ?seed= and ?winner= on the end of the
+    game's address."""
     if sys.platform == "emscripten":
         import platform  # pygbag's version, which reaches into the web page
         query = urllib.parse.parse_qs(str(platform.window.location.search).lstrip("?"))
+        try:
+            seed = int(query.get("seed", [""])[0])
+        except ValueError:
+            seed = None
         winner = query.get("winner", [""])[0].upper()
-        return None, winner if winner in OTHER else None
+        return seed, winner if winner in OTHER else None
     parser = argparse.ArgumentParser(description="Two skaters fight for the puck.")
     parser.add_argument("seed", nargs="?", type=int, help="play this seed every time")
     parser.add_argument("--winner", type=str.upper, choices=sorted(OTHER),
@@ -857,7 +862,8 @@ async def main():
     clock = pygame.time.Clock()
 
     def play():
-        # Without a seed from the command line, use the time it starts, in milliseconds.
+        # Without a seed from the command line or the web page, use the time it
+        # starts, in milliseconds.
         play_seed = seed if seed is not None else time.time_ns() // 1_000_000
         outcome = draw_outcome(play_seed, winner)
         print(f"Seed {play_seed}. {describe(outcome)}", end="\n\n")
