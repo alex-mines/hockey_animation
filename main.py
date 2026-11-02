@@ -24,23 +24,34 @@ rink (an oval) or a figure 8, cutting across the middle through the centre spot
 and looping round the east end the other way. Half ice on a figure 8 is the
 centre spot, so a shot from there comes from the very centre of the rink.
 
+A play can also be fixed so one team always wins, by always being the one
+that shoots. It is drawn the same way, except that the puck changes hands at
+most MAX_FIXED_CHANGES times after the first steal attempt, and the last steal
+attempt, which is the first if there are no others, works or misses depending
+on which the winner needs. A steal attempt that misses ends with the skater
+going for the puck sliding to a stop as the carrier skates on.
+
 Every play comes from a seed, so the same seed always plays out the same way.
 Each play is seeded with the time it starts, printed with what was drawn; run
-`uv run main.py 42` to watch seed 42 instead. Press SPACE to play again (the
-same seed if one was given, otherwise a new one), ESC to quit.
+`uv run main.py 42` to watch seed 42 instead, and add `--winner A` or
+`--winner B` to fix who wins. Press SPACE to play again (the same seed if one
+was given, otherwise a new one), ESC to quit.
 
 The skaters are the sprite pack's Type 1 skaters, painted in their teams'
 uniforms by make_uniforms.py.
 
 It also runs in a web browser: pygbag builds it into a web page (see
-web/index.html).
+web/index.html), where ?winner=A or ?winner=B on the end of the game's address
+fixes who wins.
 """
+import argparse
 import asyncio
 import bisect
 import math
 import random
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 import pygame
@@ -76,6 +87,7 @@ CHASE_GAP = 40        # how close the chaser hangs back behind the carrier until
 
 # The random play, and where on the ice its steals happen.
 MEAN_CHANGES = 3      # average number of changes of possession after the first steal attempt
+MAX_FIXED_CHANGES = 5 # most steal attempts after the first in a play fixed so one team wins
 MIN_CHASE = 450       # pixels the carrier skates, at least, from one steal to the next
 MAX_WAIT = 0.75       # seconds a skater who has lost the puck stands, at most, before chasing
 STEAL_REACH = 160     # steals happen within this many pixels of half ice, clear of the corners
@@ -356,41 +368,78 @@ def make_puck():
     return puck
 
 
-def draw_outcome(seed):
+OTHER = {"A": "B", "B": "A"}
+
+
+def shooter(starter, first_steal, steals):
+    """The team that has the puck after every steal attempt, and so shoots."""
+    holder = OTHER[starter] if first_steal else starter
+    for _, works in steals:
+        if works:
+            holder = OTHER[holder]
+    return holder
+
+
+def draw_outcome(seed, winner=None):
     """Draw how a play goes: which team starts with the puck, whether the first
-    steal attempt works, the side of the rink, north or south, of each change of
-    possession after that, and a seed for which laps are figure 8s."""
+    steal attempt works, the side of the rink, north or south, of each steal
+    attempt after that and whether it works, and a seed for which laps are
+    figure 8s.
+
+    Every steal attempt after the first works, unless a winner is given. Then
+    there are at most MAX_FIXED_CHANGES of them, and the last attempt, or the
+    first if there are no others, works or misses so that the winner ends up
+    with the puck.
+    """
     rng = random.Random(seed)
     starter = "A" if rng.random() < 0.5 else "B"
     first_steal = rng.random() < 0.5
     # The exponential distribution gives any number, not just whole ones, so
     # round it. That keeps the average number of changes close to MEAN_CHANGES.
     changes = round(rng.expovariate(1 / MEAN_CHANGES))
-    sides = ["north" if rng.random() < 0.5 else "south" for _ in range(changes)]
+    if winner is not None:
+        changes = min(changes, MAX_FIXED_CHANGES)
+    steals = [("north" if rng.random() < 0.5 else "south", True) for _ in range(changes)]
     # How many laps a play takes isn't known in advance, so the track tosses a
     # coin for each lap as the skaters reach it, seeded with this.
     laps = rng.getrandbits(32)
-    return starter, first_steal, sides, laps
+    if winner is not None and shooter(starter, first_steal, steals) != winner:
+        if steals:
+            steals[-1] = (steals[-1][0], False)
+        else:
+            first_steal = not first_steal
+    return starter, first_steal, steals, laps
 
 
-def given_seed():
-    """The seed asked for on the command line, if any."""
-    text = sys.argv[1] if len(sys.argv) > 1 else ""
-    return int(text) if text.isdigit() else None
+def given_options():
+    """The seed and the team that always wins, if they were asked for: on the
+    command line or, in a web browser, ?winner= on the end of the game's address."""
+    if sys.platform == "emscripten":
+        import platform  # pygbag's version, which reaches into the web page
+        query = urllib.parse.parse_qs(str(platform.window.location.search).lstrip("?"))
+        winner = query.get("winner", [""])[0].upper()
+        return None, winner if winner in OTHER else None
+    parser = argparse.ArgumentParser(description="Two skaters fight for the puck.")
+    parser.add_argument("seed", nargs="?", type=int, help="play this seed every time")
+    parser.add_argument("--winner", type=str.upper, choices=sorted(OTHER),
+                        help="the team that always wins")
+    options = parser.parse_args()
+    return options.seed, options.winner
 
 
 def describe(outcome):
-    starter, first_steal, sides, _ = outcome
-    other = {"A": "B", "B": "A"}
-    holder = other[starter] if first_steal else starter
-    if len(sides) % 2:
-        holder = other[holder]
+    starter, first_steal, steals, _ = outcome
+    holder = shooter(starter, first_steal, steals)
+    sides = [side for side, works in steals if works]
     if not sides:
         changes = "After that the puck doesn't change hands."
     else:
         times = "once" if len(sides) == 1 else f"{len(sides)} times"
         changes = f"After that it changes hands {times}: {', '.join(sides)}."
-    return (f"Team {starter} starts with the puck. Team {other[starter]}'s first steal attempt "
+    for side, works in steals:
+        if not works:
+            changes += f" Then Team {OTHER[holder]} goes for it on the {side} side and misses."
+    return (f"Team {starter} starts with the puck. Team {OTHER[starter]}'s first steal attempt "
             f"{'works' if first_steal else 'misses'}.\n{changes}\n"
             f"Team {holder} shoots on the {'west' if holder == 'A' else 'east'} goal.")
 
@@ -458,14 +507,15 @@ class Game:
     """One play, set up from an outcome made by draw_outcome()."""
 
     def __init__(self, team_a, team_b, outcome):
-        starter, self.first_steal, sides, laps = outcome
+        starter, self.first_steal, steals, laps = outcome
         self.track = Track(laps)
         # Team A starts at the top middle of the oval going forwards, which is
         # counter-clockwise, and Team B at the bottom middle going backwards,
         # so both start off heading west.
         self.a = Skater(self.track, *team_a, WEST_GOAL, 0, 1)
         self.b = Skater(self.track, *team_b, EAST_GOAL, self.track.half_ice(1)[0], -1)
-        self.sides = list(sides)  # side of the rink of each steal still to come
+        self.steals = list(steals)  # side of the rink of each steal attempt still to come, and whether it works
+        self.works = True           # whether the next steal attempt works
         self.carrier = self.a if starter == "A" else self.b
         self.defender = self.b if starter == "A" else self.a  # until they have gone for the puck
         self.defender.set_off += DEFENDER_START_DELAY
@@ -547,40 +597,44 @@ class Game:
                 if high > progress:
                     yield low, high
 
-    def facing_goal_parts(self, low, high, heading):
-        """The parts of a stretch where the chaser, if they take the puck there,
+    def facing_goal_parts(self, low, high, heading, shooter):
+        """The parts of a stretch where the shooter, if they have the puck there,
         will be heading for their goal when they next cross half ice, at least
         MIN_CARRY on."""
         while low <= high:
             crossing, east = self.next_half_ice(low, heading)
-            if self.faces_goal(self.chaser, east):
+            if self.faces_goal(shooter, east):
                 yield low, min(high, crossing - MIN_CARRY)
             low = crossing + MIN_CARRY
 
-    def steal_spot(self, side, start, last):
-        """Where the next steal happens.
+    def steal_spot(self, side, start, shooter=None):
+        """Where the next steal attempt happens.
 
         It is on the first stretch of the given side of the rink where steals
         can happen, see LapKind, at least MIN_CHASE on from start so the skater
-        who has just lost the puck has time to catch up. The last steal is kept
-        to where the new carrier will be heading for their goal when they next
-        cross half ice, which is where they shoot from.
+        who has just lost the puck has time to catch up. The last attempt is
+        kept to where the shooter, whoever comes away from it with the puck,
+        will be heading for their goal when they next cross half ice, which is
+        where they shoot from.
         """
         heading = self.carrier.heading
         earliest = start + MIN_CHASE
         for low, high in self.steal_stretches(side, start, heading):
-            parts = self.facing_goal_parts(low, high, heading) if last else [(low, high)]
+            parts = [(low, high)] if shooter is None else self.facing_goal_parts(low, high, heading, shooter)
             for part_low, part_high in parts:
                 if part_high >= max(part_low, earliest):
                     return max(part_low, earliest)
 
     def plan(self):
-        """After a change of possession, or the first attempt at one, work out where
-        the next steal happens or, after the last, where the carrier shoots from."""
+        """After a steal attempt, work out where the next one happens or, after
+        the last, where the carrier shoots from."""
         start = self.carrier.progress()
-        if self.sides:
-            side = self.sides.pop(0)
-            self.target = self.steal_spot(side, start, last=not self.sides)
+        if self.steals:
+            side, self.works = self.steals.pop(0)
+            shooter = None
+            if not self.steals:
+                shooter = self.chaser if self.works else self.carrier
+            self.target = self.steal_spot(side, start, shooter)
             return
         self.target = None
         self.shot_spot, east = self.next_half_ice(start, self.carrier.heading)
@@ -720,11 +774,16 @@ class Game:
                 self.chaser, self.defender = loser, None
                 self.plan()
         elif self.target is not None and chaser.state == "chasing" and chaser.progress() >= carrier.progress():
-            # The chaser draws level on the inside and takes the puck.
-            self.take_puck(chaser)
-            chaser.enter("skating")
-            carrier.enter("stopping", then="recovering")
-            self.chaser = carrier
+            if self.works:
+                # The chaser draws level on the inside and takes the puck.
+                self.take_puck(chaser)
+                chaser.enter("skating")
+                carrier.enter("stopping", then="recovering")
+                self.chaser = carrier
+            else:
+                # The chaser draws level and goes for the puck but misses it,
+                # sliding to a stop as the carrier skates on with it.
+                chaser.enter("stopping", then="recovering")
             self.plan()
 
     def swing(self):
@@ -786,12 +845,12 @@ async def main():
     team_b = (load_skater("B"), load_strip(UNIFORMS / "Team_B_Shoot_East_strip3.png", 3))
     puck = make_puck()
     clock = pygame.time.Clock()
-    seed = given_seed()
+    seed, winner = given_options()
 
     def play():
         # Without a seed from the command line, use the time it starts, in milliseconds.
         play_seed = seed if seed is not None else time.time_ns() // 1_000_000
-        outcome = draw_outcome(play_seed)
+        outcome = draw_outcome(play_seed, winner)
         print(f"Seed {play_seed}. {describe(outcome)}", end="\n\n")
         return Game(team_a, team_b, outcome)
 

@@ -117,12 +117,18 @@
     }
   `;
 
-  // Each play loads the game, built by pygbag into game/, afresh. It seeds
-  // itself with the time it starts.
+  // This page is published at the top of the site and again in red/, where
+  // Team A always wins, and blue/, where Team B always wins (see
+  // .github/workflows/pages.yml). They all play the one game, in game/.
+  const folder = new URL(".", location.href).pathname.split("/").at(-2);
+  const winner = {red: "A", blue: "B"}[folder];
+  const gameAddress = winner ? `../game/index.html?winner=${winner}` : "game/index.html";
+
+  // Each play loads the game afresh. It seeds itself with the time it starts.
   document.getElementById("play").addEventListener("click", () => {
     const game = document.createElement("iframe");
     game.title = "Hockey animation";
-    game.src = "game/index.html";
+    game.src = gameAddress;
     game.addEventListener("load", () => {
       const style = game.contentDocument.createElement("style");
       style.textContent = gameStyle;

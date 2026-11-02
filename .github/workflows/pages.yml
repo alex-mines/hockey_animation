@@ -1,5 +1,6 @@
 # Builds the animation into a web page with pygbag and publishes it on GitHub
-# Pages: web/index.html, with the seed box, at the top and the game in game/.
+# Pages: web/index.html at the top, and again in red/, where Team A always
+# wins, and blue/, where Team B always wins, with the game in game/.
 name: Publish to GitHub Pages
 
 on:
@@ -38,8 +39,10 @@ jobs:
 
       - name: Put the site together
         run: |
-          mkdir -p _site/game
+          mkdir -p _site/game _site/red _site/blue
           cp web/index.html _site/
+          cp web/index.html _site/red/
+          cp web/index.html _site/blue/
           cp build/web/* _site/game/
 
       - uses: actions/upload-pages-artifact@v3
