@@ -1,15 +1,17 @@
 """Paint the skaters' uniforms: Team A in navy with maroon, Team B in black with
-yellow.
+yellow, and for plays fixed so one team wins, Team A all in maroon and Team B
+all in navy.
 
 The sprite pack draws its skaters in three colours: black outlines, skin and
 one kit colour for everything else, so a jersey has no design of its own. This
-paints one design onto every strip the animation uses, in each team's colours:
+paints one design onto every strip the animation uses, in each kit's colours:
 helmet, jersey, pants and socks in the main colour, with stripes in the trim
 colour across the shoulders, round the cuffs and round the hem. Each view of
-the skater shows the same stripes from its own angle.
+the skater shows the same stripes from its own angle. The all-maroon and
+all-navy kits have their stripes in the main colour, so they don't show.
 
 Team B's skaters in the pack are Team A's drawings in other colours (and its
-East shooting strip is a copy of the West one), so both teams are painted from
+East shooting strip is a copy of the West one), so every kit is painted from
 Team A's. The painted strips go in uniforms/, where main.py loads them.
 
 Run it again after changing the colours or the stripes: uv run make_uniforms.py
@@ -26,10 +28,17 @@ UNIFORMS = Path(__file__).parent / "uniforms"
 # The pack's colours, by what they are drawn as in the stripes below.
 PACK_COLOURS = {(0, 0, 0): "#", (209, 144, 85): "s", (54, 109, 0): "o"}
 
-TEAMS = {
-    "A": {"main": (26, 38, 96), "trim": (150, 30, 58)},  # navy and maroon
-    # A shade off true black, so the black outlines still show the arms and legs.
-    "B": {"main": (40, 40, 44), "trim": (255, 206, 0)},  # black and yellow
+NAVY = (26, 38, 96)
+MAROON = (150, 30, 58)
+BLACK = (40, 40, 44)  # a shade off true black, so the black outlines still show the arms and legs
+YELLOW = (255, 206, 0)
+
+# Each kit by the start of its strips' file names, see main.py's KITS.
+KITS = {
+    "Team_A": {"main": NAVY, "trim": MAROON},
+    "Team_B": {"main": BLACK, "trim": YELLOW},
+    "Team_A_Maroon": {"main": MAROON, "trim": MAROON},
+    "Team_B_Navy": {"main": NAVY, "trim": NAVY},
 }
 
 
@@ -222,11 +231,11 @@ def paint(name, source, stripes, colours):
 
 def main():
     UNIFORMS.mkdir(exist_ok=True)
-    for team, colours in TEAMS.items():
+    for kit, colours in KITS.items():
         for name, (source, stripes) in STRIPS.items():
             strip = paint(name, source, stripes, colours)
-            pygame.image.save(strip, UNIFORMS / f"Team_{team}_{name}_strip{len(stripes)}.png")
-    print(f"Painted {len(TEAMS) * len(STRIPS)} strips into {UNIFORMS.name}/")
+            pygame.image.save(strip, UNIFORMS / f"{kit}_{name}_strip{len(stripes)}.png")
+    print(f"Painted {len(KITS) * len(STRIPS)} strips into {UNIFORMS.name}/")
 
 
 if __name__ == "__main__":

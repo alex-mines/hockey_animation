@@ -29,7 +29,8 @@ that shoots. It is drawn the same way, except that the puck changes hands at
 most MAX_FIXED_CHANGES times after the first steal attempt, and the last steal
 attempt, which is the first if there are no others, works or misses depending
 on which the winner needs. A steal attempt that misses ends with the skater
-going for the puck sliding to a stop as the carrier skates on.
+going for the puck sliding to a stop as the carrier skates on. In these plays
+Team A is dressed all in maroon and Team B all in navy.
 
 Every play comes from a seed, so the same seed always plays out the same way.
 Each play is seeded with the time it starts, printed with what was drawn; run
@@ -59,6 +60,11 @@ import pygame
 ASSETS = Path(__file__).parent / "NES_Ice_Hockey_Full_Files" / "NES Ice Hockey Full Files"
 RINK_IMAGE = ASSETS / "Ice Hockey Rink Tile Set" / "NES_IceHockey_IceRink_WithGoal.png"
 UNIFORMS = Path(__file__).parent / "uniforms"  # the pack's skaters in the teams' uniforms, see make_uniforms.py
+
+# What Team A and Team B wear, by the start of their strips' file names in
+# uniforms/: navy with maroon and black with yellow, or all maroon and all navy
+# in plays fixed so one team wins.
+KITS = {False: ("Team_A", "Team_B"), True: ("Team_A_Maroon", "Team_B_Navy")}
 
 FPS = 60
 SKATE_SPEED = 100     # pixels per second
@@ -355,8 +361,10 @@ def load_strip(path, count):
     return frames, (helmet[0] + helmet[-1]) // 2, strip.get_bounding_rect().bottom
 
 
-def load_skater(team):
-    return [load_strip(UNIFORMS / f"Team_{team}_Skate_{name}_strip4.png", 4) for name in DIRECTIONS]
+def load_kit(kit, shoots):
+    """A skater in a kit from KITS: skating each way, and shooting the way given."""
+    return ([load_strip(UNIFORMS / f"{kit}_Skate_{name}_strip4.png", 4) for name in DIRECTIONS],
+            load_strip(UNIFORMS / f"{kit}_Shoot_{shoots}_strip3.png", 3))
 
 
 def make_puck():
@@ -841,11 +849,12 @@ async def main():
     screen = pygame.display.set_mode(rink.get_size(), pygame.SCALED)
     pygame.display.set_caption("NES Ice Hockey - steal and shoot")
     rink = rink.convert()
-    team_a = (load_skater("A"), load_strip(UNIFORMS / "Team_A_Shoot_West_strip3.png", 3))
-    team_b = (load_skater("B"), load_strip(UNIFORMS / "Team_B_Shoot_East_strip3.png", 3))
+    seed, winner = given_options()
+    kit_a, kit_b = KITS[winner is not None]
+    team_a = load_kit(kit_a, "West")
+    team_b = load_kit(kit_b, "East")
     puck = make_puck()
     clock = pygame.time.Clock()
-    seed, winner = given_options()
 
     def play():
         # Without a seed from the command line, use the time it starts, in milliseconds.
