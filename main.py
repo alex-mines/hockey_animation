@@ -43,7 +43,9 @@ uniforms by make_uniforms.py.
 
 It also runs in a web browser: pygbag builds it into a web page (see
 web/index.html), where ?seed=42 on the end of the game's address plays seed 42
-and ?winner=A or ?winner=B fixes who wins.
+and ?winner=A or ?winner=B fixes who wins. There it tells the page when each
+play starts and who wins, so the page can announce it once the puck is in the
+net.
 """
 import argparse
 import asyncio
@@ -440,6 +442,14 @@ def given_options():
     return options.seed, options.winner
 
 
+def tell_page(message):
+    """In a web browser, pass a message to the page the game is shown in:
+    "play" as each play starts and "won A" or "won B" when it ends."""
+    if sys.platform == "emscripten":
+        import platform  # pygbag's version, which reaches into the web page
+        platform.window.parent.postMessage(message, "*")
+
+
 def describe(outcome):
     starter, first_steal, steals, _ = outcome
     holder = shooter(starter, first_steal, steals)
@@ -547,7 +557,7 @@ class Game:
         self.touch_length = DRIBBLE_LENGTH
         self.handoff_from = None
         self.handoff_time = HANDOFF_TIME
-        self.shot_from = self.shot_target = self.struck_at = None
+        self.shot_from = self.shot_target = self.shot_by = self.struck_at = None
 
     def phase(self):
         """How far through the current touch of the puck the carrier is, from 0 to 1."""
@@ -767,6 +777,7 @@ class Game:
                 if self.carrier is skater:
                     self.shot_from = self.puck_position()
                     self.shot_target = skater.goal
+                    self.shot_by = "A" if skater is self.a else "B"
                     self.struck_at = self.time
                     self.carrier = None
 
@@ -828,9 +839,21 @@ class Game:
         # Shot: the puck flies in a straight line from the stick and stops in the net.
         from_x, from_y = self.shot_from
         target_x, target_y = self.shot_target
-        flight = (self.time - self.struck_at) * PUCK_SPEED
-        t = min(flight / math.hypot(target_x - from_x, target_y - from_y), 1)
+        t = self.shot_flown()
         return from_x + (target_x - from_x) * t, from_y + (target_y - from_y) * t
+
+    def shot_flown(self):
+        """How far the shot has flown towards the net, from 0 to 1."""
+        from_x, from_y = self.shot_from
+        target_x, target_y = self.shot_target
+        flight = (self.time - self.struck_at) * PUCK_SPEED
+        return min(flight / math.hypot(target_x - from_x, target_y - from_y), 1)
+
+    def winner(self):
+        """The team that shot, once the puck is in the net, which ends the play."""
+        if self.struck_at is not None and self.shot_flown() == 1:
+            return self.shot_by
+        return None
 
     def draw(self, screen, rink, puck):
         sprites = []
@@ -867,9 +890,11 @@ async def main():
         play_seed = seed if seed is not None else time.time_ns() // 1_000_000
         outcome = draw_outcome(play_seed, winner)
         print(f"Seed {play_seed}. {describe(outcome)}", end="\n\n")
+        tell_page("play")
         return Game(team_a, team_b, outcome)
 
     game = play()
+    told = None  # the play the page was last told the winner of
     running = True
     while running:
         # Cap the step so dragging the window doesn't make the skaters jump.
@@ -883,6 +908,9 @@ async def main():
                 game = play()
 
         game.update(dt)
+        if game.winner() and told is not game:
+            tell_page(f"won {game.winner()}")
+            told = game
         game.draw(screen, rink, puck)
         pygame.display.flip()
         # In a web browser, nothing is shown until Python hands control back.

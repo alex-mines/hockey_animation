@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hockey Race!</title>
+  <title>Baby Race</title>
   <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Press+Start+2P&display=swap">
   <style>
     body {
       box-sizing: border-box;
@@ -59,8 +59,35 @@
       border: 0;
       visibility: hidden;
     }
+    /* Who won, flashing over the end of the play: a girl for Team A, a boy
+       for Team B. */
+    #announce {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+      font-family: "Luckiest Guy", cursive;
+      font-size: clamp(1.75rem, 8vw, 5.5rem);
+      letter-spacing: 0.04em;
+      -webkit-text-stroke: 0.06em #0b1f4d;
+      paint-order: stroke fill;
+      text-shadow: 0.07em 0.07em 0 #0b1f4d;
+    }
+    #announce span {
+      transform: rotate(-4deg);
+    }
+    #announce.girl {
+      color: #ff6fb5;
+    }
+    #announce.boy {
+      color: #4cc9f0;
+    }
     .blink {
       animation: blink 1s steps(2, jump-none) infinite;
+    }
+    #announce .blink {
+      animation-duration: 0.6s;
     }
     @keyframes blink {
       from { opacity: 1; }
@@ -124,7 +151,7 @@
   </style>
 </head>
 <body>
-  <h1>Hockey Race!</h1>
+  <h1>Baby Race</h1>
   <div id="stage"><span class="blink">Press Play!</span></div>
   <form id="controls">
     <input id="seed" type="text" inputmode="numeric" pattern="-?[0-9]+"
@@ -178,6 +205,33 @@
     loading.className = "blink";
     loading.textContent = "Loading...";
     stage.replaceChildren(loading, game);
+  });
+
+  // The game tells this page when a play starts, which SPACE in the game also
+  // does, and who won once the puck is in the net (see tell_page() in main.py).
+  const announce = document.createElement("div");
+  announce.id = "announce";
+  announce.setAttribute("role", "status");
+  const words = document.createElement("span");
+  words.className = "blink";
+  announce.append(words);
+  const announcements = {
+    A: {words: "It's a Girl!", className: "girl"},
+    B: {words: "It's a Boy!", className: "boy"},
+  };
+
+  window.addEventListener("message", (event) => {
+    const game = stage.querySelector("iframe");
+    if (!game || event.source !== game.contentWindow) return;
+    if (event.data === "play") {
+      announce.remove();
+    } else if (typeof event.data === "string" && event.data.startsWith("won ")) {
+      const announcement = announcements[event.data.slice(4)];
+      if (!announcement) return;
+      words.textContent = announcement.words;
+      announce.className = announcement.className;
+      stage.append(announce);
+    }
   });
 </script>
 </body>
